@@ -15,6 +15,7 @@ class PostState(str, Enum):
 
 class Post(BaseModel):
     id: UUID
+    product_kb_id: int
     platform: str
     post_idea_id: UUID | None
     signal_id: UUID | None

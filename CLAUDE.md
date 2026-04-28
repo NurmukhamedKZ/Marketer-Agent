@@ -46,7 +46,6 @@ Reddit API → signals table → CMO Agent → X Sub-Agent → posts table (draf
 | Пакеты | uv |
 | Тесты | pytest + pytest-asyncio |
 
-**Не вводить:** LangGraph (если только LangChain AgentExecutor не deprecated), Celery, Redis, FastAPI, Docker Compose, vector DB, observability платформы.
 
 ---
 

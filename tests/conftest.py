@@ -2,7 +2,8 @@ import asyncio
 import pathlib
 import pytest
 import asyncpg
-from app.config import get_settings
+from app.config import get_settings, Settings
+from app.db.setup import ensure_seed_data
 
 _TEST_DB = "mktg_agent_test"
 
@@ -40,3 +41,21 @@ async def db_pool():
     yield pool
 
     await pool.close()
+
+
+@pytest.fixture(scope="session")
+async def seed_ids(db_pool: asyncpg.Pool) -> tuple[int, int]:
+    """Returns (user_id, product_kb_id) for a seeded test user and product_kb."""
+    seed_settings = Settings.model_construct(
+        seed_user_telegram_id=1,
+        seed_user_email="seed@test.com",
+        seed_product_name="SeedProduct",
+        seed_product_one_liner="Test one liner",
+        seed_product_description="Test description",
+        seed_product_icp="Test ICP",
+        seed_product_brand_voice="Test voice",
+        seed_product_landing_url="https://seed.example.com",
+    )
+    product_kb_id = await ensure_seed_data(db_pool, seed_settings)
+    user_id = await db_pool.fetchval("SELECT user_id FROM product_kb WHERE id = $1", product_kb_id)
+    return user_id, product_kb_id

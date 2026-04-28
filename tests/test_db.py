@@ -26,22 +26,26 @@ async def test_post_state_enum_exists(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_signals_unique_constraint(db_pool):
+async def test_signals_unique_constraint(db_pool, seed_ids):
+    _, product_kb_id = seed_ids
     await db_pool.execute(
         """
-        INSERT INTO signals (source, source_id, title, url, raw_json)
-        VALUES ('reddit', 'abc123', 'Test title', 'https://example.com', '{}')
-        ON CONFLICT (source, source_id) DO NOTHING
-        """
+        INSERT INTO signals (product_kb_id, source, source_id, title, url, raw_json)
+        VALUES ($1, 'reddit', 'abc123', 'Test title', 'https://example.com', '{}')
+        ON CONFLICT (product_kb_id, source, source_id) DO NOTHING
+        """,
+        product_kb_id,
     )
     await db_pool.execute(
         """
-        INSERT INTO signals (source, source_id, title, url, raw_json)
-        VALUES ('reddit', 'abc123', 'Duplicate', 'https://example.com', '{}')
-        ON CONFLICT (source, source_id) DO NOTHING
-        """
+        INSERT INTO signals (product_kb_id, source, source_id, title, url, raw_json)
+        VALUES ($1, 'reddit', 'abc123', 'Duplicate', 'https://example.com', '{}')
+        ON CONFLICT (product_kb_id, source, source_id) DO NOTHING
+        """,
+        product_kb_id,
     )
     count = await db_pool.fetchval(
-        "SELECT COUNT(*) FROM signals WHERE source_id = 'abc123'"
+        "SELECT COUNT(*) FROM signals WHERE source_id = 'abc123' AND product_kb_id = $1",
+        product_kb_id,
     )
     assert count == 1

@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     post_max_chars: int = 270
     sub_agent_max_iterations: int = 8
 
+    # Seed data (MVP: one user + one product_kb created at deploy)
+    seed_user_telegram_id: int = 0
+    seed_user_email: str = ""
+    seed_product_name: str = ""
+    seed_product_one_liner: str = ""
+    seed_product_description: str = ""
+    seed_product_icp: str = ""
+    seed_product_brand_voice: str = ""
+    seed_product_landing_url: str = ""
+
     # Logging
     log_level: str = "INFO"
     log_format: str = "json"

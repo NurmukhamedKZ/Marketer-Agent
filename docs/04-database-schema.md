@@ -1,15 +1,30 @@
 # Database Schema
 
+БД PostgreSQL хостится на **Railway**. Строка подключения в `.env` → `DATABASE_URL`.
+
 File: `migrations/001_initial_schema.sql`
+
+**Иерархия:** `users → product_kb (проекты) → signals / post_ideas / posts`
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- =========================================
--- product_kb: single-row knowledge base
+-- users
+-- =========================================
+CREATE TABLE users (
+    id          SERIAL PRIMARY KEY,
+    telegram_id BIGINT UNIQUE,
+    email       TEXT UNIQUE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- =========================================
+-- product_kb: one per project, many per user
 -- =========================================
 CREATE TABLE product_kb (
     id              SERIAL PRIMARY KEY,
+    user_id         INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     product_name    TEXT NOT NULL,
     one_liner       TEXT NOT NULL,
     description     TEXT NOT NULL,
@@ -21,13 +36,12 @@ CREATE TABLE product_kb (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Enforce singleton row in application code.
-
 -- =========================================
 -- signals: Reddit questions/posts
 -- =========================================
 CREATE TABLE signals (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_kb_id   INT NOT NULL REFERENCES product_kb(id) ON DELETE CASCADE,
     source          TEXT NOT NULL,            -- 'reddit'
     source_id       TEXT NOT NULL,
     subreddit       TEXT,
@@ -40,31 +54,30 @@ CREATE TABLE signals (
     used            BOOLEAN NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at      TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days'),
-    UNIQUE (source, source_id)
+    UNIQUE (product_kb_id, source, source_id)
 );
 
 CREATE INDEX idx_signals_unused_active
-    ON signals (created_at DESC)
-    WHERE used = FALSE AND expires_at > NOW();
+    ON signals (product_kb_id, created_at DESC)
+    WHERE used = FALSE;
 
 -- =========================================
 -- post_ideas: CMO Agent's strategic decisions
 -- =========================================
--- The CMO writes a post_idea (topic + angle + target signal),
--- then delegates to a platform sub-agent which produces the final post.
 CREATE TABLE post_ideas (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_kb_id   INT NOT NULL REFERENCES product_kb(id) ON DELETE CASCADE,
     signal_id       UUID REFERENCES signals(id) ON DELETE SET NULL,
     target_platform TEXT NOT NULL,            -- 'x' for MVP
-    topic           TEXT NOT NULL,            -- e.g. "leading indicators of churn"
-    angle           TEXT NOT NULL,            -- e.g. "reactive dashboards are too late"
-    cmo_reasoning   TEXT NOT NULL,            -- why the CMO picked this signal/angle
+    topic           TEXT NOT NULL,
+    angle           TEXT NOT NULL,
+    cmo_reasoning   TEXT NOT NULL,
     state           TEXT NOT NULL DEFAULT 'open',  -- open | consumed | dropped
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     consumed_at     TIMESTAMPTZ
 );
 
-CREATE INDEX idx_post_ideas_open ON post_ideas (created_at DESC) WHERE state = 'open';
+CREATE INDEX idx_post_ideas_open ON post_ideas (product_kb_id, created_at DESC) WHERE state = 'open';
 
 -- =========================================
 -- posts: drafts → published, with state machine
@@ -80,6 +93,7 @@ CREATE TYPE post_state AS ENUM (
 
 CREATE TABLE posts (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_kb_id       INT NOT NULL REFERENCES product_kb(id) ON DELETE CASCADE,
     platform            TEXT NOT NULL,
     post_idea_id        UUID REFERENCES post_ideas(id) ON DELETE SET NULL,
     signal_id           UUID REFERENCES signals(id) ON DELETE SET NULL,
@@ -111,9 +125,9 @@ CREATE TABLE posts (
     fail_reason         TEXT
 );
 
-CREATE INDEX idx_posts_state ON posts (state, created_at DESC);
+CREATE INDEX idx_posts_state ON posts (product_kb_id, state, created_at DESC);
 CREATE INDEX idx_posts_platform_published
-    ON posts (platform, published_at DESC)
+    ON posts (product_kb_id, platform, published_at DESC)
     WHERE state = 'published';
 
 -- updated_at triggers

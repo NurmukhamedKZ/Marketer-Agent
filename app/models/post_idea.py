@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 class PostIdea(BaseModel):
     id: UUID
+    product_kb_id: int
     signal_id: UUID | None
     target_platform: str
     topic: str

@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 class Signal(BaseModel):
     id: UUID
+    product_kb_id: int
     source: str
     source_id: str
     subreddit: str | None
