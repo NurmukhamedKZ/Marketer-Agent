@@ -85,13 +85,20 @@ app/
 
 ## База данных
 
+БД PostgreSQL хостится на **Railway**. Строка подключения в `.env` → `DATABASE_URL`.
+
 Одна миграция: `migrations/001_initial_schema.sql`
 
+**Иерархия:** `users → product_kb (проекты) → signals / post_ideas / posts`
+
 **Таблицы:**
-- `product_kb` — singleton, знания о продукте (name, one_liner, description, icp, brand_voice, banned_topics, landing_url)
-- `signals` — сигналы из Reddit, живут 7 дней, флаг `used`
-- `post_ideas` — решения CMO Agent (signal → topic + angle + reasoning), state: `open/consumed/dropped`
-- `posts` — посты с state machine
+- `users` — пользователи (telegram_id, email)
+- `product_kb` — проект пользователя (name, one_liner, description, icp, brand_voice, banned_topics, landing_url); много на одного user
+- `signals` — сигналы из Reddit, живут 7 дней, флаг `used`; привязаны к `product_kb_id`
+- `post_ideas` — решения CMO Agent (signal → topic + angle + reasoning), state: `open/consumed/dropped`; привязаны к `product_kb_id`
+- `posts` — посты с state machine; привязаны к `product_kb_id`
+
+**Для MVP:** создаём одного `user` и один `product_kb` при деплое, везде используем их ID.
 
 **State machine постов:**
 ```
