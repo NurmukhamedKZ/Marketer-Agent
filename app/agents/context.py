@@ -1,14 +1,18 @@
-from dataclasses import dataclass, field
+from contextvars import ContextVar
 from uuid import UUID
 
 
-@dataclass
-class AgentContext:
-    """Runtime context injected into agent tools via LangChain ToolRuntime.
+current_product_kb_id: ContextVar[int] = ContextVar("current_product_kb_id")
+current_signal_id: ContextVar[UUID | None] = ContextVar("current_signal_id", default=None)
+current_post_idea_id: ContextVar[UUID | None] = ContextVar("current_post_idea_id", default=None)
 
-    These fields are NOT exposed in the tool schema to the LLM.
-    They are read inside @tool functions from runtime.context.
-    """
-    product_kb_id: int
-    signal_id: UUID | None = field(default=None)
-    post_idea_id: UUID | None = field(default=None)
+
+def set_agent_context(
+    product_kb_id: int,
+    signal_id: UUID | None = None,
+    post_idea_id: UUID | None = None,
+) -> None:
+    """Set context vars before invoking an agent. Call once per agent run."""
+    current_product_kb_id.set(product_kb_id)
+    current_signal_id.set(signal_id)
+    current_post_idea_id.set(post_idea_id)

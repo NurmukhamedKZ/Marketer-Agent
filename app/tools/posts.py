@@ -1,9 +1,9 @@
 from uuid import UUID
 
 import asyncpg
-from langchain.tools import tool, ToolRuntime
+from langchain.tools import tool
 
-from app.agents.context import AgentContext
+from app.agents.context import current_product_kb_id, current_signal_id
 from app.db.pool import get_pool
 
 
@@ -33,13 +33,12 @@ async def create_post_idea(
     angle: str,
     cmo_reasoning: str,
     target_platform: str,
-    runtime: ToolRuntime[AgentContext],
 ) -> dict:
     """Save the CMO's strategic decision for a signal. Returns post_idea_id."""
     pool = await get_pool()
     return await _insert_post_idea(
         pool,
-        runtime.context.product_kb_id,
-        runtime.context.signal_id,
+        current_product_kb_id.get(),
+        current_signal_id.get(),
         topic, angle, cmo_reasoning, target_platform,
     )
