@@ -42,3 +42,47 @@ async def create_post_idea(
         current_signal_id.get(),
         topic, angle, cmo_reasoning, target_platform,
     )
+
+
+async def _list_recent_posts(
+    pool: asyncpg.Pool,
+    product_kb_id: int,
+    platform: str,
+    limit: int,
+) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT id, draft_text, final_text, state, created_at
+        FROM posts
+        WHERE product_kb_id = $1 AND platform = $2
+        ORDER BY created_at DESC
+        LIMIT $3
+        """,
+        product_kb_id, platform, limit,
+    )
+    return [dict(r) for r in rows]
+
+
+@tool
+async def list_recent_posts(
+    platform: str,
+    limit: int,
+) -> list[dict]:
+    """List the N most recent posts on a platform for deduplication context."""
+    pool = await get_pool()
+    return await _list_recent_posts(pool, current_product_kb_id.get(), platform, limit)
+
+
+async def _get_post(pool: asyncpg.Pool, post_id: str) -> dict | None:
+    row = await pool.fetchrow(
+        "SELECT * FROM posts WHERE id = $1::uuid",
+        post_id,
+    )
+    return dict(row) if row else None
+
+
+@tool
+async def get_post(post_id: str) -> dict | None:
+    """Fetch a single post by ID."""
+    pool = await get_pool()
+    return await _get_post(pool, post_id)
