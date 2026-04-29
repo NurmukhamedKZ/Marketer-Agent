@@ -117,7 +117,7 @@ draft → pending → approved → published
 | 2 | Schema migration + state_machine.py + тесты | ✅ Готово (частично — state_machine.py есть) |
 | 3 | product_kb setup + тест | 🔲 |
 | 4 | Reddit collector + тесты | ✅ Готово (`app/signals/reddit_collector.py`, 8 тестов) |
-| 5 | signals MCP сервер + тест | 🔲 |
+| 5 | signals MCP сервер + тест | ✅ Готово |
 | 6 | posts MCP сервер + utm_builder MCP сервер + тесты | 🔲 |
 | 7 | web_search MCP сервер (Tavily wrapper) | 🔲 |
 | 8 | Smoke test MCP слоя (скрипт + langchain-mcp-adapters) | 🔲 |
