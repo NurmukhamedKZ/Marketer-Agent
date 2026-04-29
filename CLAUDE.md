@@ -109,25 +109,86 @@ draft → pending → approved → published
 
 ## План реализации
 
-### Статус на 2026-04-28
+### Статус на 2026-04-30
 
 | Шаг | Что | Статус |
 |---|---|---|
 | 1 | Project skeleton (pyproject.toml, config, structlog, DB pool, migration runner) | ✅ Готово |
 | 2 | Schema migration + state_machine.py + тесты | ✅ Готово (частично — state_machine.py есть) |
 | 3 | product_kb setup + тест | 🔲 |
-| 4 | Reddit collector + signals MCP сервер + тест | 🔲 |
-| 5 | posts MCP сервер + utm_builder MCP сервер + тесты | 🔲 |
-| 6 | web_search MCP сервер (Tavily wrapper) | 🔲 |
-| 7 | Smoke test MCP слоя (скрипт + langchain-mcp-adapters) | 🔲 |
-| 8 | X Sub-Agent — вызвать напрямую с ручным post_idea | 🔲 |
-| 9 | Telegram bot (aiogram) — send_for_approval + 3 кнопки | 🔲 |
-| 10 | X Publisher — привязать к approve callback | 🔲 |
-| 11 | CMO Agent — создаёт post_ideas, вызывает X Sub-Agent | 🔲 |
-| 12 | Analytics fetcher | 🔲 |
-| 13 | Тесты агентов (mocked LLM + MCP) | 🔲 |
-| 14 | systemd units, cron, deployment scripts | 🔲 |
-| 15 | README | 🔲 |
+| 4 | Reddit collector + тесты | ✅ Готово (`app/signals/reddit_collector.py`, 8 тестов) |
+| 5 | signals MCP сервер + тест | 🔲 |
+| 6 | posts MCP сервер + utm_builder MCP сервер + тесты | 🔲 |
+| 7 | web_search MCP сервер (Tavily wrapper) | 🔲 |
+| 8 | Smoke test MCP слоя (скрипт + langchain-mcp-adapters) | 🔲 |
+| 9 | X Sub-Agent — вызвать напрямую с ручным post_idea | 🔲 |
+| 10 | Telegram bot (aiogram) — send_for_approval + 3 кнопки | 🔲 |
+| 11 | X Publisher — привязать к approve callback | 🔲 |
+| 12 | CMO Agent — создаёт post_ideas, вызывает X Sub-Agent | 🔲 |
+| 13 | Analytics fetcher | 🔲 |
+| 14 | Тесты агентов (mocked LLM + MCP) | 🔲 |
+| 15 | systemd units, cron, deployment scripts | 🔲 |
+| 16 | README | 🔲 |
+
+---
+
+## Logging
+
+**Файл:** `app/logging_setup.py` — содержит `setup_logging()` и `ToolCallLogger`.
+
+### Инициализация
+
+Вызывать `setup_logging()` **один раз в каждой точке входа**, первым делом до других импортов:
+- `app/main.py`
+- `app/approval/bot.py`
+- каждый MCP-сервер (`app/mcp/*.py`) — они отдельные процессы
+
+```python
+from app.logging_setup import setup_logging
+setup_logging()
+```
+
+### Паттерн в каждом модуле
+
+```python
+import time
+from uuid import uuid4
+import structlog
+
+log = structlog.get_logger()  # на уровне модуля
+
+async def run_cmo_agent(...) -> None:
+    run_log = log.bind(component="cmo_agent", run_id=str(uuid4()))
+    run_log.info("phase_start", phase="signal_selection")
+    t0 = time.monotonic()
+    # ... работа ...
+    run_log.info("phase_end", phase="signal_selection", duration_ms=round((time.monotonic() - t0) * 1000))
+```
+
+### Логирование tool calls (MCP)
+
+Передавать `ToolCallLogger` как LangChain callback — он логирует все tool calls централизованно:
+
+```python
+from app.logging_setup import ToolCallLogger
+
+callbacks = [ToolCallLogger("cmo_agent")]
+result = await agent.ainvoke({...}, config={"callbacks": callbacks})
+```
+
+### Что логировать обязательно
+
+- `phase_start` / `phase_end` с `duration_ms` для каждой фазы агента
+- Все tool calls — через `ToolCallLogger` (автоматически)
+- State transitions постов: `post_state_transition`, поля `post_id`, `from_state`, `to_state`
+- Ошибки с `exc_info=True`
+
+### Конфиг (`.env`)
+
+```
+LOG_LEVEL=INFO       # DEBUG / INFO / WARNING / ERROR
+LOG_FORMAT=json      # json (prod) | console (dev)
+```
 
 ---
 
