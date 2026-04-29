@@ -75,7 +75,11 @@ async def list_recent_posts(
 
 async def _get_post(pool: asyncpg.Pool, post_id: str) -> dict | None:
     row = await pool.fetchrow(
-        "SELECT * FROM posts WHERE id = $1::uuid",
+        """
+        SELECT id, platform, post_idea_id, signal_id, draft_text, final_text,
+               sub_agent_reasoning, state, utm_url, created_at, updated_at
+        FROM posts WHERE id = $1::uuid
+        """,
         post_id,
     )
     return dict(row) if row else None
