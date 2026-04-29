@@ -64,11 +64,10 @@ app/
     web_search_server.py
     utm_builder_server.py
   agents/
-    cmo_agent.py             # LangChain: стратегия + делегирование
-    x_sub_agent.py           # LangChain: написание поста
-    prompts.py
-    schemas.py
-    mcp_client.py            # загрузка MCP tools в LangChain
+    cmo_agent_service.py     # CMOAgentService: lifecycle + run() — transport-agnostic
+    x_sub_agent_service.py   # XSubAgentService: то же для X sub-agent
+    prompts.py               # build_system_prompt(product_kb) — строки промптов
+    schemas.py               # pydantic-модели для outputs агентов
   approval/
     bot.py                   # aiogram Dispatcher
     handlers.py              # message + callback handlers
@@ -79,6 +78,59 @@ app/
 ```
 
 **Важно для будущего дашборда:** бизнес-логика живёт в `agents/`, `publisher/`, `analytics/` — они никогда не знают про Telegram. `approval/` — изолированный transport слой. Когда придёт время добавить FastAPI, просто добавляем `app/api/` с роутами, которые вызывают те же сервисы.
+
+---
+
+## Агенты — паттерн реализации
+
+Каждый агент реализован как **сервисный класс** с lifecycle через async context manager:
+
+```python
+class CMOAgentService:
+    def __init__(self, settings: Settings, pool: asyncpg.Pool) -> None: ...
+
+    async def __aenter__(self) -> CMOAgentService:
+        # 1. Читает product_kb из БД → строит system_prompt
+        # 2. Вызывает MultiServerMCPClient.get_tools() → получает tool definitions
+        # 3. Строит агента через create_agent() с InMemorySaver
+        ...
+
+    async def __aexit__(self, *args) -> None: ...
+
+    async def run(self, thread_id: str, message: str) -> AsyncIterator[str]:
+        # Стримит токены через astream_events(version="v2")
+        ...
+```
+
+**Правила:**
+- `__init__` — только сохраняет зависимости, никакого I/O
+- Тяжёлая инициализация (MCP tools, agent build) — только в `__aenter__`
+- `run()` — единственный публичный метод; не знает про Telegram или HTTP
+- `product_kb` читается один раз при старте, вшивается в system_prompt
+- Один инстанс на весь процесс, создаётся в точке входа:
+
+```python
+# Telegram bot
+async with CMOAgentService(settings, pool) as cmo:
+    dp["cmo"] = cmo
+    await dp.start_polling()
+
+# FastAPI (future)
+async with CMOAgentService(settings, pool) as cmo:
+    app.state.cmo = cmo
+    yield
+```
+
+**Стриминг токенов:**
+```python
+async for event in agent.astream_events(
+    {"messages": [{"role": "user", "content": message}]},
+    config={"configurable": {"thread_id": thread_id}, ...},
+    version="v2",
+):
+    if event["event"] == "on_chat_model_stream":
+        yield event["data"]["chunk"].content
+```
 
 ---
 
@@ -192,17 +244,30 @@ LOG_FORMAT=json      # json (prod) | console (dev)
 
 ---
 
+## LangChain / LangGraph API — важные детали (версии зафиксированы в pyproject.toml)
+
+| Что | Правильно | Неправильно |
+|---|---|---|
+| Создание агента | `from langchain.agents import create_agent` | `from langgraph.prebuilt import create_react_agent` (deprecated) |
+| Параметр промпта | `system_prompt=...` | `prompt=...` (старый API) |
+| Тип скомпилированного графа | `from langgraph.pregel import Pregel` | `CompiledGraph` (не существует в 1.1.10) |
+| MCP client lifecycle | `client.get_tools()` вызывается один раз при старте | `async with client` — context manager удалён в 0.2.2 |
+| MCP сессии | Каждый tool call открывает свою stdio-сессию автоматически | Не нужно держать persistent connection |
+| Стриминг | `agent.astream_events(..., version="v2")` | `agent.astream()` даёт chunks, не токены |
+
+---
+
 ## Правила кодирования
 
 1. **Прочитай весь спек перед тем как писать код.** Не начинай имплементацию сразу.
-2. **Проверь LangChain ≥ 1.2 API** перед стартом — `AgentExecutor` мигрировал в LangGraph.
+2. **Проверь LangChain ≥ 1.2 API** перед стартом — см. таблицу выше.
 3. **Проверь `langchain-mcp-adapters`** — правильное ли имя пакета, работает ли stdio.
 4. **MCP: только stdio транспорт** для MVP. Не поднимать HTTP серверы для MCP.
-5. **Не вводить LangGraph** для agent loops, если только `AgentExecutor` не deprecated.
+5. **Агенты — сервисные классы**, не функции. Один инстанс на процесс, lifecycle через `async with`.
 6. **Type hints везде.** `mypy --strict` должен проходить на `app/`.
 7. **Все внешние данные через pydantic модели** (LLM outputs, API responses, MCP returns).
 8. **Async везде.** Не мешать sync DB calls в async пути.
-9. **Одна публичная функция на модуль.** Детали реализации — private.
+9. **Один публичный метод на сервис** (`run()`). Детали реализации — `_private`.
 10. **Константы из config**, не hardcoded.
 
 ---

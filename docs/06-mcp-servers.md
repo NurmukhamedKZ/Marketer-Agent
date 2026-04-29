@@ -6,7 +6,6 @@ Each MCP server is a small, focused FastMCP app with a few related tools. They r
 
 | MCP Server | Tools | Used by |
 |------------|-------|---------|
-| `product_kb` | `get_product_kb()` | CMO, X Sub-Agent |
 | `signals` | `list_unused_signals(limit)`, `mark_signal_used(signal_id)`, `get_signal(signal_id)` | CMO |
 | `posts` | `create_post_idea(...)`, `create_post_draft(...)`, `list_recent_posts(platform, limit)` | CMO, X Sub-Agent |
 | `web_search` | `search(query, max_results)` | X Sub-Agent (for context, fact-checking) |
