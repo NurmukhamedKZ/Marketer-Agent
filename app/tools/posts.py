@@ -3,7 +3,7 @@ from uuid import UUID
 import asyncpg
 from langchain.tools import tool
 
-from app.agents.context import current_product_kb_id, current_signal_id
+from app.agents.context import current_product_kb_id, current_signal_id, current_post_idea_id
 from app.db.pool import get_pool
 
 
@@ -90,3 +90,52 @@ async def get_post(post_id: str) -> dict | None:
     """Fetch a single post by ID."""
     pool = await get_pool()
     return await _get_post(pool, post_id)
+
+
+async def _insert_post_draft(
+    pool: asyncpg.Pool,
+    product_kb_id: int,
+    post_idea_id: UUID,
+    draft_text: str,
+    sub_agent_reasoning: str,
+    utm_url: str | None,
+) -> dict:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            idea = await conn.fetchrow(
+                "SELECT signal_id FROM post_ideas WHERE id = $1",
+                post_idea_id,
+            )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO posts (
+                    product_kb_id, platform, post_idea_id, signal_id,
+                    draft_text, sub_agent_reasoning, utm_url, state
+                )
+                VALUES ($1, 'x', $2, $3, $4, $5, $6, 'draft')
+                RETURNING id
+                """,
+                product_kb_id, post_idea_id, idea["signal_id"],
+                draft_text, sub_agent_reasoning, utm_url,
+            )
+            await conn.execute(
+                "UPDATE post_ideas SET state = 'consumed', consumed_at = NOW() WHERE id = $1",
+                post_idea_id,
+            )
+    return {"post_id": str(row["id"])}
+
+
+@tool
+async def create_post_draft(
+    draft_text: str,
+    sub_agent_reasoning: str,
+    utm_url: str | None,
+) -> dict:
+    """Save the draft post and mark the post_idea as consumed. Returns post_id."""
+    pool = await get_pool()
+    return await _insert_post_draft(
+        pool,
+        current_product_kb_id.get(),
+        current_post_idea_id.get(),
+        draft_text, sub_agent_reasoning, utm_url,
+    )
