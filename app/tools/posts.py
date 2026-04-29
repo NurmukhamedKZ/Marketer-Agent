@@ -106,6 +106,8 @@ async def _insert_post_draft(
                 "SELECT signal_id FROM post_ideas WHERE id = $1",
                 post_idea_id,
             )
+            if idea is None:
+                raise ValueError(f"post_idea {post_idea_id} not found")
             row = await conn.fetchrow(
                 """
                 INSERT INTO posts (
