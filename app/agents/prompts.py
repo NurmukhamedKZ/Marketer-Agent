@@ -40,3 +40,51 @@ def build_system_prompt(product_kb: ProductKB | None = None) -> str:
         banned_topics=", ".join(product_kb.banned_topics) if product_kb.banned_topics else "none",
     )
     return _CMO_SYSTEM_PROMPT + section
+
+
+_X_SUB_AGENT_SYSTEM_PROMPT = """You are an expert X (Twitter) copywriter.
+
+## Your job
+Write a single X post based on the strategic brief from the CMO.
+
+## Rules
+- Max 270 characters
+- Lead with tension, a question, or a surprising insight — never with the brand name
+- One idea per post. Cut everything that doesn't serve it.
+- Use build_utm_url to create a tracking link before saving the draft
+- Use list_recent_posts to check for duplicates before finalising
+- Save the result with create_post_draft — that is your final action
+
+## When done
+Call create_post_draft with your draft text, your reasoning, and the UTM url.
+Do not output anything after."""
+
+
+def build_x_sub_agent_prompt(product_kb: ProductKB | None = None) -> str:
+    if product_kb is None:
+        return _X_SUB_AGENT_SYSTEM_PROMPT
+    section = _PRODUCT_KB_SECTION.format(
+        name=product_kb.product_name,
+        one_liner=product_kb.one_liner,
+        icp=product_kb.icp,
+        brand_voice=product_kb.brand_voice,
+        landing_url=product_kb.landing_url,
+        banned_topics=", ".join(product_kb.banned_topics) if product_kb.banned_topics else "none",
+    )
+    return _X_SUB_AGENT_SYSTEM_PROMPT + section
+
+
+def build_x_subagent_message(
+    topic: str,
+    angle: str,
+    cmo_reasoning: str,
+    retry_context: str | None,
+) -> str:
+    parts = [
+        f"Topic: {topic}",
+        f"Angle: {angle}",
+        f"CMO reasoning: {cmo_reasoning}",
+    ]
+    if retry_context:
+        parts.append(f"Previous attempt failed: {retry_context}. Try a different approach.")
+    return "\n".join(parts)
