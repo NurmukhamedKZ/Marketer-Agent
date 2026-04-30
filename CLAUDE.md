@@ -255,6 +255,66 @@ async def test_create_post_idea(db_pool, seed_ids):
 
 ---
 
+## Tool Subagent — паттерн реализации
+
+Когда один агент вызывает другой агент как инструмент, используется **tool factory** паттерн (closure).
+
+**Ключевые отличия от обычного `@tool`:**
+- Sub-agent `run()` возвращает `str` (не `AsyncIterator`) — CMO ждёт полного результата
+- Свежий `uuid4()` thread_id на каждый вызов — чистая история, без загрязнения неудачными попытками
+- CMO оркестрирует retry через `retry_context` аргумент в следующем вызове, не через shared state
+- Параллельные вызовы безопасны: `InMemorySaver` изолирует state по `thread_id`
+
+```python
+from langchain_core.tools import BaseTool
+from langchain.tools import tool, ToolRuntime
+
+def make_invoke_x_sub_agent_tool(service: XSubAgentService) -> BaseTool:
+    @tool
+    async def invoke_x_sub_agent(
+        post_idea_id: str,
+        topic: str,
+        angle: str,
+        cmo_reasoning: str,
+        retry_context: str | None,
+        runtime: ToolRuntime[AgentContext],
+    ) -> dict:
+        """Delegate X post writing to X Sub-Agent. Returns the agent's final response."""
+        thread_id = str(uuid4())
+        message = build_x_subagent_message(topic, angle, cmo_reasoning, retry_context)
+        result = await service.run(
+            message, thread_id,
+            runtime.context.product_kb_id,
+            UUID(post_idea_id),
+        )
+        return {"result": result}
+    return invoke_x_sub_agent
+```
+
+**Lifecycle — оба сервиса в одной точке входа (шаг 12):**
+```python
+async with XSubAgentService(settings, pool) as x_service:
+    invoke_tool = make_invoke_x_sub_agent_tool(x_service)
+    async with CMOAgentService(settings, pool, extra_tools=[invoke_tool]) as cmo:
+        dp["cmo"] = cmo
+        await dp.start_polling()
+```
+
+**Почему не `AgentContext`:** положить сервис в `AgentContext` создаёт circular import (`context.py` ↔ `x_sub_agent_service.py`). Factory closure — чистое решение.
+
+**Тестирование tool factory:**
+```python
+# Для async @tool — вызывать через .coroutine, НЕ .func (.func is None для async)
+result = await tool_fn.coroutine(
+    post_idea_id="uuid-str", topic="...", ..., runtime=mock_runtime
+)
+```
+
+**post_idea_id передаётся как аргумент инструмента (не через AgentContext):**
+CMO LLM создаёт post_idea → получает `{"post_idea_id": "abc-123"}` → передаёт этот ID в следующем tool call. Скрыть его в контексте нельзя — он появляется только во время run.
+
+---
+
 ## Logging
 
 **Файл:** `app/logging_setup.py` — содержит `setup_logging()` и `ToolCallLogger`.
@@ -331,6 +391,8 @@ LOG_FORMAT=json      # json (prod) | console (dev)
 | `args_schema` MCP инструментов (из `langchain-mcp-adapters`) | `tool.args_schema` — это plain `dict` (JSON Schema); доступ: `tool.args_schema.get("properties", {})` | `tool.args_schema.model_json_schema()` — AttributeError, т.к. это не Pydantic-модель |
 | FastMCP `@mcp.tool` | Декоратор оставляет функцию callable: `await web_search(query, count)` — работает напрямую | — |
 | Запуск MCP сервера web_search | `python -m app.mcp.web_search` | `python -m app.mcp.web_search_server` — модуль не существует |
+| Импорт `ToolRuntime` | `from langchain.tools import tool, ToolRuntime` | `from langchain_core.tools import ToolRuntime` — не экспортируется, `ImportError` |
+| Тест async `@tool` напрямую | `await tool_fn.coroutine(arg1=..., arg2=...)` | `tool_fn.func(...)` — `func` is `None` для async tools, `TypeError` |
 
 ## ВАЖНО:
 1) Перед тем как писать какой либо код на LangChain или LangGraph, ты должен прочитать актуальную документацию через context7 MCP
