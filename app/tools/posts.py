@@ -38,7 +38,28 @@ async def create_post_idea(
     target_platform: platforms,
     runtime: ToolRuntime[AgentContext],
 ) -> dict:
-    """Save the CMO's strategic decision for a signal. Returns post_idea_id."""
+    """Save a strategic post idea. Call this BEFORE delegating to a writer sub-agent
+    (e.g. write_x_post) — the writer requires the returned post_idea_id.
+
+    Args:
+        topic: 3-7 word topic label. Example: "AI agents replacing SDR teams".
+            Not a full sentence, not a question.
+        angle: One-sentence thesis the post will defend. Must be a claim, not a topic.
+            Good: "SDR teams are being replaced by agents, not augmented."
+            Bad:  "SDR teams and AI agents." (that's a topic, not an angle)
+        cmo_reasoning: 2-4 sentences explaining why this signal, why now, why this
+            angle wins over alternatives. This is your strategic memo, not marketing copy.
+        target_platform: One of "x" | "reddit" | "linkedin" | "instagram" | "tiktok".
+            For MVP almost always "x".
+
+    Returns:
+        {"post_idea_id": "<uuid>"} — pass this id to the writer sub-agent.
+
+    Edge cases:
+        - Do not call twice for the same signal in one run; if you need to revise,
+          drop the previous idea conceptually and craft a stronger one.
+        - Do not call after the writer has already produced a draft for this idea.
+    """
     pool = await get_pool()
     return await _insert_post_idea(
         pool,
@@ -72,7 +93,28 @@ async def list_recent_posts(
     limit: int,
     runtime: ToolRuntime[AgentContext],
 ) -> list[dict]:
-    """List the N most recent posts on a platform for deduplication context."""
+    """List the N most recent posts on a platform. Use this for deduplication —
+    check before drafting that you are not repeating a topic, angle, or hook
+    already used in the last few posts.
+
+    Args:
+        platform: One of "x" | "reddit" | "linkedin" | "instagram" | "tiktok".
+            Match the platform you are about to post on.
+        limit: Number of recent posts to return. Range: 1-50. Recommended: 10.
+            Larger limits waste tokens; smaller may miss recent duplicates.
+
+    Returns:
+        List of dicts ordered newest-first, each with:
+            id (uuid), draft_text (str), final_text (str | None),
+            state (draft|pending|approved|published|rejected|failed),
+            created_at (datetime).
+        Empty list if no posts exist yet for this platform.
+
+    Edge cases:
+        - Posts in state="rejected" are still returned — they reveal patterns
+          the user disliked, useful negative signal.
+        - Call once per run, near the start. Do not call repeatedly.
+    """
     pool = await get_pool()
     return await _list_recent_posts(pool, runtime.context.product_kb_id, platform, limit)
 
@@ -91,7 +133,24 @@ async def _get_post(pool: asyncpg.Pool, post_id: str) -> dict | None:
 
 @tool
 async def get_post(post_id: str) -> dict | None:
-    """Fetch a single post by ID."""
+    """Fetch a single post by its UUID. Use when you need full details of a
+    specific post (e.g. retrieving an earlier draft, inspecting reasoning,
+    or fetching a post referenced by id from another tool result).
+
+    Args:
+        post_id: UUID string, exactly as returned from create_post_draft or
+            list_recent_posts. Example: "3f1a8c2e-9d4b-4a1f-8e2c-1b9d7e6f0a2c".
+
+    Returns:
+        Dict with: id, platform, post_idea_id, signal_id, draft_text, final_text,
+        sub_agent_reasoning, state, utm_url, created_at, updated_at.
+        Returns None if no post with that id exists.
+
+    Edge cases:
+        - Returns None (not an error) for unknown ids — handle that branch.
+        - Do not call to "verify" a post you just created; the create tool
+          already returned its id.
+    """
     pool = await get_pool()
     return await _get_post(pool, post_id)
 
@@ -138,7 +197,29 @@ async def create_post_draft(
     utm_url: str | None,
     runtime: ToolRuntime[AgentContext],
 ) -> dict:
-    """Save the draft post and mark the post_idea as consumed. Returns post_id."""
+    """Save the final post draft and mark the parent post_idea as consumed.
+    This is the writer sub-agent's TERMINAL action — call it exactly once,
+    at the end of your run, then stop producing output.
+
+    Args:
+        draft_text: The post body, ready to publish. Constraints for X:
+            - Max 270 characters (hard limit; 280 minus safety buffer)
+            - No surrounding quotes, no "Here is your post:" preface
+            - If utm_url is provided, it MUST appear inside draft_text exactly once
+        sub_agent_reasoning: 1-3 sentences explaining the hook choice and why
+            this draft wins. This is for human reviewers, not the post itself.
+        utm_url: Tracking URL produced by build_utm_url, or None if the post
+            does not link out. Must be a full http(s) URL when provided.
+
+    Returns:
+        {"post_id": "<uuid>"} — the saved draft id.
+
+    Edge cases:
+        - Raises ValueError if the linked post_idea does not exist (should not
+          happen if you were given a valid post_idea_id by the orchestrator).
+        - Calling twice in one run creates two posts and consumes the idea twice
+          — do not retry on success.
+    """
     pool = await get_pool()
     return await _insert_post_draft(
         pool,

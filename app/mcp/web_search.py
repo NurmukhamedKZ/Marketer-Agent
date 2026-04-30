@@ -18,15 +18,33 @@ _MAX_REDIRECTS = 5
 @mcp.tool
 async def web_search(query: str, count: int = 5) -> str:
     """
-    Search the internet and return titles, URLs, and snippets.
-
-    Use this tool when `rag_search` returns no relevant results and the user
-    asks about something that may be available on the web (news, general knowledge,
-    university events not yet in the knowledge base, etc.).
+    Search the public web (Searxng meta-search) and return ranked results
+    as titles, URLs, and snippets. Use this to research trending topics,
+    verify claims, or discover what audiences are discussing right now.
 
     Args:
-        query: Search query string.
-        count: Number of results to return (1–10, default 5).
+        query: 3-8 keywords describing what you want to find. Plain text,
+            no quotes, no boolean operators. Optimised for snippet quality,
+            not exact-match.
+            Good: "ai sdr agents 2026 adoption"
+            Bad:  "What are the latest trends in AI SDR agents?" (too long,
+                  question form hurts ranking)
+        count: Number of results to return. Range: 1-10. Default: 5.
+            Values >10 are silently clamped to 20 server-side, but the
+            agent should stay within 1-10 for token efficiency.
+
+    Returns:
+        Plain-text block, one result per 2-3 lines:
+            "1. <title>
+                <url>
+                <snippet>"
+        Returns "No results found for: <query>" if nothing matches.
+        Returns "❌ Web search error: <reason>" on transport/HTTP failure.
+
+    Edge cases:
+        - Snippets may be missing for some results; URL and title are always present.
+        - Results are not deduplicated by domain — the same site can appear twice.
+        - For full page contents, follow up with web_fetch on a specific URL.
     """
     _base_url = os.getenv("SEARXNG_URL", "http://localhost:8888")
 
@@ -85,13 +103,31 @@ def _validate_url(url: str) -> tuple[bool, str]:
 @mcp.tool
 async def web_fetch(url: str) -> str:
     """
-    Fetch a URL and return its readable text content.
-
-    Use this tool after `web_search` when the search snippets are not detailed
-    enough to answer the user's question and you need the full page content.
+    Fetch a single URL and return its readable text content (HTML stripped,
+    links/headings/lists preserved as Markdown). Use this AFTER web_search
+    when a snippet looks promising but you need the full article — quotes,
+    statistics, primary-source detail.
 
     Args:
-        url: The full URL to fetch (must be http or https).
+        url: Full http(s) URL, exactly as returned by web_search. Must include
+            scheme. Example: "https://example.com/blog/post".
+            Other schemes (file://, ftp://, javascript:) are rejected.
+
+    Returns:
+        Cleaned text of the page, up to 15,000 characters. If the page
+        exceeds that, output is truncated and ends with
+        "[Truncated at 15000 chars]".
+        For JSON responses, returns pretty-printed JSON.
+        Returns "❌ Invalid URL: <reason>" on bad input.
+        Returns "❌ Failed to fetch <url>: <reason>" on network/HTTP error.
+
+    Edge cases:
+        - Some sites block scrapers (403/Cloudflare); on failure try a
+          different result from web_search rather than retrying.
+        - Do NOT fetch the same URL twice in one run — the result is deterministic.
+        - Heavy SPA pages may return mostly script noise; prefer article URLs
+          over homepage URLs when researching a topic.
+        - One fetch ≈ 15k chars of context; budget accordingly.
     """
     _max_chars = 15000
     logger.info("TOOL ▶ web_fetch called — url=%r", url)
