@@ -2,8 +2,17 @@ from datetime import datetime
 
 import pytest
 
-from app.agents.prompts import build_x_sub_agent_prompt, build_x_subagent_message
+from app.agents.prompts import build_x_sub_agent_prompt
 from app.models.product_kb import ProductKB
+
+
+def test_agent_context_has_no_signal_id():
+    from app.agents.context import AgentContext
+    import dataclasses
+    fields = {f.name for f in dataclasses.fields(AgentContext)}
+    assert "signal_id" not in fields
+    assert "product_kb_id" in fields
+    assert "post_idea_id" in fields
 
 
 def _make_kb(**overrides) -> ProductKB:
@@ -51,71 +60,79 @@ def test_build_x_sub_agent_prompt_with_kb_contains_banned_topics():
     assert "politics" in prompt
 
 
-def test_build_x_subagent_message_no_retry():
-    msg = build_x_subagent_message(
-        topic="SaaS pricing",
-        angle="Year 1 mistakes",
-        cmo_reasoning="High engagement topic",
-        retry_context=None,
-    )
-    assert "Topic: SaaS pricing" in msg
-    assert "Angle: Year 1 mistakes" in msg
-    assert "CMO reasoning: High engagement topic" in msg
-    assert "Previous attempt" not in msg
+def test_subagent_spec_is_frozen_dataclass():
+    import dataclasses
+    from app.agents.factory import SubAgentSpec
+
+    spec = SubAgentSpec(name="test", description="desc", system_prompt="prompt", tools=[])
+    assert dataclasses.is_dataclass(spec)
+    # frozen — mutation raises FrozenInstanceError
+    try:
+        spec.name = "other"  # type: ignore[misc]
+        assert False, "should have raised"
+    except dataclasses.FrozenInstanceError:
+        pass
 
 
-def test_build_x_subagent_message_with_retry_includes_context():
-    msg = build_x_subagent_message(
-        topic="SaaS pricing",
-        angle="Year 1 mistakes",
-        cmo_reasoning="High engagement topic",
-        retry_context="post was too long, exceeded 270 chars",
-    )
-    assert "Previous attempt failed: post was too long, exceeded 270 chars" in msg
-    assert "Try a different approach" in msg
+def test_as_tool_returns_tool_with_spec_name():
+    from unittest.mock import MagicMock
+    from app.agents.factory import SubAgentSpec, as_tool
 
-
-from unittest.mock import AsyncMock, MagicMock
-
-
-def test_make_invoke_x_sub_agent_tool_returns_tool_with_correct_name():
-    from app.agents.x_sub_agent_service import make_invoke_x_sub_agent_tool
-
-    mock_service = MagicMock()
-    tool_fn = make_invoke_x_sub_agent_tool(mock_service)
-    assert tool_fn.name == "invoke_x_sub_agent"
+    spec = SubAgentSpec(name="write_x_post", description="Write an X post.", system_prompt="", tools=[])
+    mock_agent = MagicMock()
+    tool_fn = as_tool(mock_agent, spec, product_kb_id=1)
+    assert tool_fn.name == "write_x_post"
 
 
 @pytest.mark.asyncio
-async def test_make_invoke_x_sub_agent_tool_calls_service_run():
-    from app.agents.x_sub_agent_service import make_invoke_x_sub_agent_tool
-    from uuid import UUID
+async def test_as_tool_calls_ainvoke_and_returns_last_message():
+    from unittest.mock import MagicMock, AsyncMock
+    from langchain_core.messages import AIMessage
+    from app.agents.factory import SubAgentSpec, as_tool
 
-    mock_service = AsyncMock()
-    mock_service.run.return_value = "Great post written"
+    spec = SubAgentSpec(name="write_x_post", description="Write an X post.", system_prompt="", tools=[])
 
-    tool_fn = make_invoke_x_sub_agent_tool(mock_service)
+    mock_agent = MagicMock()
+    mock_agent.ainvoke = AsyncMock(return_value={
+        "messages": [AIMessage(content="ignored"), AIMessage(content="Final post text")]
+    })
 
-    mock_runtime = MagicMock()
-    mock_runtime.context.product_kb_id = 42
+    tool_fn = as_tool(mock_agent, spec, product_kb_id=42)
 
-    # Call the underlying coroutine function directly, bypassing ToolRuntime injection
-    post_idea_uuid = "12345678-1234-5678-1234-567812345678"
     result = await tool_fn.coroutine(
-        post_idea_id=post_idea_uuid,
-        topic="SaaS pricing",
-        angle="Year 1 mistakes",
-        cmo_reasoning="High engagement",
-        retry_context=None,
-        runtime=mock_runtime,
+        query="Write a post about SaaS pricing",
+        post_idea_id="12345678-1234-5678-1234-567812345678",
     )
 
-    assert mock_service.run.called
-    call_kwargs = mock_service.run.call_args
-    # message arg (positional 0) contains topic
-    assert "SaaS pricing" in call_kwargs.args[0]
-    # product_kb_id matches runtime context
-    assert call_kwargs.args[2] == 42
-    # post_idea_id is UUID
-    assert call_kwargs.args[3] == UUID(post_idea_uuid)
-    assert result == {"result": "Great post written"}
+    assert result == "Final post text"
+    mock_agent.ainvoke.assert_called_once()
+    call_args = mock_agent.ainvoke.call_args
+    assert "Write a post about SaaS pricing" in call_args[0][0]["messages"][0]["content"]
+    assert call_args.kwargs["context"].product_kb_id == 42
+
+
+@pytest.mark.asyncio
+async def test_agent_runtime_run_streams_tokens():
+    from unittest.mock import MagicMock, AsyncMock, patch
+    from app.agents.runtime import AgentRuntime
+
+    # Build a runtime with a pre-built mock agent (bypass __aenter__)
+    runtime = object.__new__(AgentRuntime)
+    runtime._kb_id = 1
+
+    async def fake_astream_events(*args, **kwargs):
+        for content in ["Hello", " world"]:
+            yield {
+                "event": "on_chat_model_stream",
+                "data": {"chunk": MagicMock(content=content)},
+            }
+
+    mock_agent = MagicMock()
+    mock_agent.astream_events = fake_astream_events
+    runtime._agent = mock_agent
+
+    tokens = []
+    async for token in runtime.run("thread-1", "test message"):
+        tokens.append(token)
+
+    assert "".join(tokens) == "Hello world"

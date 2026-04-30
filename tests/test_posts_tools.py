@@ -19,7 +19,6 @@ async def test_create_post_idea_inserts_row(db_pool: asyncpg.Pool, seed_ids: tup
     result = await _insert_post_idea(
         pool=db_pool,
         product_kb_id=product_kb_id,
-        signal_id=signal_id,
         topic="SaaS deployment",
         angle="pain point",
         cmo_reasoning="High engagement post",

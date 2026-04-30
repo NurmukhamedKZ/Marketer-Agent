@@ -72,19 +72,3 @@ def build_x_sub_agent_prompt(product_kb: ProductKB | None = None) -> str:
         banned_topics=", ".join(product_kb.banned_topics) if product_kb.banned_topics else "none",
     )
     return _X_SUB_AGENT_SYSTEM_PROMPT + section
-
-
-def build_x_subagent_message(
-    topic: str,
-    angle: str,
-    cmo_reasoning: str,
-    retry_context: str | None,
-) -> str:
-    parts = [
-        f"Topic: {topic}",
-        f"Angle: {angle}",
-        f"CMO reasoning: {cmo_reasoning}",
-    ]
-    if retry_context:
-        parts.append(f"Previous attempt failed: {retry_context}. Try a different approach.")
-    return "\n".join(parts)
