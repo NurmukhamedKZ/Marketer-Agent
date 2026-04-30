@@ -2,7 +2,7 @@
 Smoke test: invoke X Sub-Agent directly with a manual post_idea.
 
 Usage:
-    python scripts/test_x_subagent.py <post_idea_id>
+    PYTHONPATH=. python scripts/test_x_subagent.py <post_idea_id>
 
 Requirements:
     - .env with DATABASE_URL and ANTHROPIC_API_KEY
