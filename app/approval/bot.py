@@ -8,7 +8,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.agents.cmo_agent_service import CMOAgentService
-from app.agents.x_sub_agent_service import XSubAgentService
+from app.agents.x_sub_agent_service import XSubAgentService, make_invoke_x_sub_agent_tool
 from app.approval.handlers import cmd_new, handle_message
 from app.approval.session_store import SessionStore
 from app.config import get_settings
@@ -31,9 +31,8 @@ async def _handle_message(
     message: Message,
     cmo: CMOAgentService,
     cmo_sessions: SessionStore,
-    x_subagent: XSubAgentService
 ) -> None:
-    await handle_message(message, cmo, cmo_sessions, x_subagent)
+    await handle_message(message, cmo, cmo_sessions)
 
 
 async def main() -> None:
@@ -45,8 +44,9 @@ async def main() -> None:
     dp = Dispatcher()
     dp.include_router(router)
 
-    async with CMOAgentService(settings, pool) as cmo:
-        async with XSubAgentService(settings, pool) as x_subagent:
+    async with XSubAgentService(settings, pool) as x_service:
+        invoke_tool = make_invoke_x_sub_agent_tool(x_service)
+        async with CMOAgentService(settings, pool, extra_tools=[invoke_tool]) as cmo:
             dp["cmo"] = cmo
             dp["cmo_sessions"] = SessionStore()
             log.info("bot_starting")

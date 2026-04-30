@@ -4,7 +4,6 @@ import structlog
 from aiogram.types import Message
 
 from app.agents.cmo_agent_service import CMOAgentService
-from app.agents.x_sub_agent_service import XSubAgentService
 from app.approval.session_store import SessionStore
 
 log = structlog.get_logger()
@@ -21,7 +20,6 @@ async def handle_message(
     message: Message,
     cmo: CMOAgentService,
     cmo_sessions: SessionStore,
-    x_subagent: XSubAgentService
 ) -> None:
     """Forward user message to CMO Agent and reply with the response."""
     thread_id = cmo_sessions.get_or_create(message.chat.id)

@@ -8,6 +8,7 @@ from uuid import uuid4
 import asyncpg
 import structlog
 from langchain.agents import create_agent
+from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import InMemorySaver
@@ -19,7 +20,6 @@ from app.config import Settings
 from app.db.queries import get_product_kb
 from app.logging_setup import ToolCallLogger
 from app.tools.posts import create_post_idea, list_recent_posts
-from app.agents.x_sub_agent_service import make_invoke_x_sub_agent_tool, XSubAgentService
 
 log = structlog.get_logger()
 
@@ -31,9 +31,15 @@ _CMO_TOOLS = [create_post_idea, list_recent_posts]
 
 
 class CMOAgentService:
-    def __init__(self, settings: Settings, pool: asyncpg.Pool) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        pool: asyncpg.Pool,
+        extra_tools: list[BaseTool] | None = None,
+    ) -> None:
         self._settings = settings
         self._pool = pool
+        self._extra_tools: list[BaseTool] = extra_tools or []
         self._agent: Pregel | None = None
         self._product_kb_id: int | None = None
 
@@ -44,13 +50,8 @@ class CMOAgentService:
         self._product_kb_id = product_kb.id
         system_prompt = build_system_prompt(product_kb)
 
-        # MCP Servers' Tools
         mcp_tools = await self._build_mcp_client().get_tools()
-
-        # Sub Agents
-        cmo_subagents = [make_invoke_x_sub_agent_tool(x_subagent)]
-
-        tools = _CMO_TOOLS + mcp_tools + cmo_subagents
+        tools = _CMO_TOOLS + mcp_tools + self._extra_tools
 
         self._agent = self._build_agent(tools, system_prompt)
         log.info("cmo_agent_service_started", tools=[t.name for t in tools])

@@ -73,8 +73,9 @@ app/
     prompts.py               # build_system_prompt, build_x_sub_agent_prompt, build_x_subagent_message
     schemas.py               # pydantic-модели для outputs агентов
   approval/
-    bot.py                   # aiogram Dispatcher
-    handlers.py              # message + callback handlers
+    bot.py                   # aiogram Dispatcher + точка входа (python -m app.approval.bot)
+    handlers.py              # cmd_new, handle_message — transport-agnostic, без aiogram internals
+    session_store.py         # SessionStore: {chat_id → thread_id} in-memory
   publisher/
     x_publisher.py           # tweepy
   analytics/
@@ -116,16 +117,21 @@ class CMOAgentService:
 - Один инстанс на весь процесс, создаётся в точке входа:
 
 ```python
-# Telegram bot
+# Telegram bot — оба сервиса вложены, SessionStore создаётся здесь
 async with CMOAgentService(settings, pool) as cmo:
-    dp["cmo"] = cmo
-    await dp.start_polling()
+    async with XSubAgentService(settings, pool) as x_subagent:
+        dp["cmo"] = cmo
+        dp["x_subagent"] = x_subagent
+        dp["cmo_sessions"] = SessionStore()
+        await dp.start_polling(bot)
 
 # FastAPI (future)
 async with CMOAgentService(settings, pool) as cmo:
     app.state.cmo = cmo
     yield
 ```
+
+**Важно:** перед стартом агентов обязательно вызвать `ensure_seed_data(pool, settings)` — иначе `get_product_kb()` вернёт `None` и `__aenter__` упадёт с `AttributeError`.
 
 **Стриминг токенов:**
 ```python
@@ -181,7 +187,8 @@ draft → pending → approved → published
 | 7 | web_search MCP сервер (Searxng) | ✅ Готово |
 | 8 | Smoke test MCP слоя (скрипт + langchain-mcp-adapters) | ✅ Готово (`tests/test_mcp_web_search.py` — 23 теста, `tests/test_mcp_client.py` — 6 smoke тестов) |
 | 9 | X Sub-Agent — вызвать напрямую с ручным post_idea | ✅ Готово (`app/agents/x_sub_agent_service.py`, `scripts/test_x_subagent.py`, 9 тестов) |
-| 10 | Telegram bot (aiogram) — send_for_approval + 3 кнопки | 🔲 |
+| 10 | Telegram bot (aiogram) — основа: `/new` команда + conversation с CMO Agent | ✅ Готово (`app/approval/bot.py`, `handlers.py`, `session_store.py`, 9 тестов) |
+| 10b | Telegram bot — send_for_approval + 3 кнопки (approve/edit/reject) | 🔲 |
 | 11 | X Publisher — привязать к approve callback | 🔲 |
 | 12 | CMO Agent — создаёт post_ideas, вызывает X Sub-Agent | 🔲 |
 | 13 | Analytics fetcher | 🔲 |
@@ -251,6 +258,39 @@ async def test_create_post_idea(db_pool, seed_ids):
         "topic", "angle", "reasoning", "x",
     )
     assert "post_idea_id" in result
+```
+
+---
+
+## Telegram Bot — паттерн реализации
+
+**`app/approval/session_store.py`** — изолированный класс без зависимостей на aiogram:
+```python
+class SessionStore:
+    def get_or_create(self, chat_id: int) -> str: ...  # возвращает текущую или создаёт новую
+    def new_session(self, chat_id: int) -> str: ...    # всегда создаёт новую (для /new)
+```
+
+**`app/approval/handlers.py`** — хендлеры без aiogram internals, тестируемы через MagicMock:
+```python
+async def cmd_new(message: Message, cmo_sessions: SessionStore) -> None: ...
+async def handle_message(message: Message, cmo: CMOAgentService, cmo_sessions: SessionStore, x_subagent: XSubAgentService) -> None: ...
+```
+
+**`app/approval/bot.py`** — DI через `dp[...]`, aiogram v3 паттерн:
+```python
+dp["cmo"] = cmo
+dp["cmo_sessions"] = SessionStore()
+# aiogram автоматически инжектирует их в хендлеры по имени параметра
+```
+
+**Тестирование хендлеров** — `AsyncMock` для `message`, обычный `MagicMock` для сервисов:
+```python
+message = AsyncMock()
+message.chat.id = 42
+cmo.run = fake_run  # async generator
+await handle_message(message, cmo, store, x_subagent)
+message.answer.assert_called_once_with("Hello world")
 ```
 
 ---
@@ -393,6 +433,8 @@ LOG_FORMAT=json      # json (prod) | console (dev)
 | Запуск MCP сервера web_search | `python -m app.mcp.web_search` | `python -m app.mcp.web_search_server` — модуль не существует |
 | Импорт `ToolRuntime` | `from langchain.tools import tool, ToolRuntime` | `from langchain_core.tools import ToolRuntime` — не экспортируется, `ImportError` |
 | Тест async `@tool` напрямую | `await tool_fn.coroutine(arg1=..., arg2=...)` | `tool_fn.func(...)` — `func` is `None` для async tools, `TypeError` |
+| `ToolCallLogger.on_tool_end` — тип `output` | `output.content if hasattr(output, "content") else str(output)` | `output[:200]` — `ToolMessage` не subscriptable в новых версиях LangChain |
+| MCP серверы для CMO | только `"web_search"` — `_CMO_MCP_SERVERS = ("web_search",)` | `"signals"`, `"posts"` — этих MCP серверов не существует, это `@tool` функции в `app/tools/` |
 
 ## ВАЖНО:
 1) Перед тем как писать какой либо код на LangChain или LangGraph, ты должен прочитать актуальную документацию через context7 MCP
