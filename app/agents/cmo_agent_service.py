@@ -13,6 +13,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
 
+from app.agents.context import AgentContext
 from app.agents.prompts import build_system_prompt
 from app.config import Settings
 from app.db.queries import get_product_kb
@@ -29,11 +30,13 @@ class CMOAgentService:
         self._settings = settings
         self._pool = pool
         self._agent: Pregel | None = None
+        self._product_kb_id: int | None = None
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
     async def __aenter__(self) -> CMOAgentService:
         product_kb = await get_product_kb(self._pool)
+        self._product_kb_id = product_kb.id
         system_prompt = build_system_prompt(product_kb)
         tools = await self._build_mcp_client().get_tools()
         self._agent = self._build_agent(tools, system_prompt)
@@ -56,6 +59,7 @@ class CMOAgentService:
         async for event in self._agent.astream_events(
             {"messages": [{"role": "user", "content": message}]},
             config=self._agent_config(thread_id),
+            context=AgentContext(product_kb_id=self._product_kb_id),
             version="v2",
         ):
             if event["event"] == "on_chat_model_stream":
@@ -91,6 +95,7 @@ class CMOAgentService:
             tools,
             system_prompt=system_prompt,
             checkpointer=InMemorySaver(),
+            context_schema=AgentContext,
         )
 
     def _agent_config(self, thread_id: str) -> dict:
