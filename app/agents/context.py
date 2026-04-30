@@ -1,18 +1,13 @@
-from contextvars import ContextVar
+from dataclasses import dataclass, field
 from uuid import UUID
 
 
-current_product_kb_id: ContextVar[int] = ContextVar("current_product_kb_id")
-current_signal_id: ContextVar[UUID | None] = ContextVar("current_signal_id", default=None)
-current_post_idea_id: ContextVar[UUID | None] = ContextVar("current_post_idea_id", default=None)
-
-
-def set_agent_context(
-    product_kb_id: int,
-    signal_id: UUID | None = None,
-    post_idea_id: UUID | None = None,
-) -> None:
-    """Set context vars before invoking an agent. Call once per agent run."""
-    current_product_kb_id.set(product_kb_id)
-    current_signal_id.set(signal_id)
-    current_post_idea_id.set(post_idea_id)
+@dataclass
+class AgentContext:
+    """
+    Context injected into every tool call via LangChain ToolRuntime.
+    Fields are hidden from the LLM schema — passed at agent invocation time.
+    """
+    product_kb_id: int
+    signal_id: UUID | None = field(default=None)
+    post_idea_id: UUID | None = field(default=None)

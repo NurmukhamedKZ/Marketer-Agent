@@ -1,9 +1,9 @@
 from uuid import UUID
 
 import asyncpg
-from langchain.tools import tool
+from langchain.tools import tool, ToolRuntime
 
-from app.agents.context import current_product_kb_id, current_signal_id, current_post_idea_id
+from app.agents.context import AgentContext
 from app.db.pool import get_pool
 
 
@@ -33,13 +33,14 @@ async def create_post_idea(
     angle: str,
     cmo_reasoning: str,
     target_platform: str,
+    runtime: ToolRuntime[AgentContext],
 ) -> dict:
     """Save the CMO's strategic decision for a signal. Returns post_idea_id."""
     pool = await get_pool()
     return await _insert_post_idea(
         pool,
-        current_product_kb_id.get(),
-        current_signal_id.get(),
+        runtime.context.product_kb_id,
+        runtime.context.signal_id,
         topic, angle, cmo_reasoning, target_platform,
     )
 
@@ -67,10 +68,11 @@ async def _list_recent_posts(
 async def list_recent_posts(
     platform: str,
     limit: int,
+    runtime: ToolRuntime[AgentContext],
 ) -> list[dict]:
     """List the N most recent posts on a platform for deduplication context."""
     pool = await get_pool()
-    return await _list_recent_posts(pool, current_product_kb_id.get(), platform, limit)
+    return await _list_recent_posts(pool, runtime.context.product_kb_id, platform, limit)
 
 
 async def _get_post(pool: asyncpg.Pool, post_id: str) -> dict | None:
@@ -132,12 +134,13 @@ async def create_post_draft(
     draft_text: str,
     sub_agent_reasoning: str,
     utm_url: str | None,
+    runtime: ToolRuntime[AgentContext],
 ) -> dict:
     """Save the draft post and mark the post_idea as consumed. Returns post_id."""
     pool = await get_pool()
     return await _insert_post_draft(
         pool,
-        current_product_kb_id.get(),
-        current_post_idea_id.get(),
+        runtime.context.product_kb_id,
+        runtime.context.post_idea_id,
         draft_text, sub_agent_reasoning, utm_url,
     )
