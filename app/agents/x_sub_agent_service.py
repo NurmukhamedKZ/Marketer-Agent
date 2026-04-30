@@ -9,6 +9,7 @@ import structlog
 from langchain.agents import create_agent
 from langchain_anthropic import ChatAnthropic
 from langchain.tools import ToolRuntime, tool
+from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
@@ -111,7 +112,7 @@ class XSubAgentService:
         }
 
 
-def make_invoke_x_sub_agent_tool(service: XSubAgentService):
+def make_invoke_x_sub_agent_tool(service: XSubAgentService) -> BaseTool:
     @tool
     async def invoke_x_sub_agent(
         post_idea_id: str,
