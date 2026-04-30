@@ -9,10 +9,11 @@ from app.approval.session_store import SessionStore
 log = structlog.get_logger()
 
 
-async def cmd_new(message: Message, cmo_sessions: SessionStore) -> None:
-    """Create a fresh conversation thread for this chat."""
+async def cmd_new(message: Message, cmo: AgentRuntime, cmo_sessions: SessionStore) -> None:
+    """Create a fresh conversation thread and refresh agent context from DB."""
     thread_id = cmo_sessions.new_session(message.chat.id)
     log.info("new_session_created", chat_id=message.chat.id, thread_id=thread_id)
+    await cmo.refresh()
     await message.reply("Новая сессия начата. Можешь писать!")
 
 

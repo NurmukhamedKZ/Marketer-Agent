@@ -21,8 +21,8 @@ router = Router()
 
 
 @router.message(Command("new"))
-async def _cmd_new(message: Message, cmo_sessions: SessionStore) -> None:
-    await cmd_new(message, cmo_sessions)
+async def _cmd_new(message: Message, cmo: AgentRuntime, cmo_sessions: SessionStore) -> None:
+    await cmd_new(message, cmo, cmo_sessions)
 
 
 @router.message(F.text)

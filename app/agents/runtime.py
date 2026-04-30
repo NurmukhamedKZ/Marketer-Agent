@@ -8,11 +8,13 @@ import asyncpg
 import structlog
 from langchain_openai import ChatOpenAI
 from langgraph.pregel import Pregel
+from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agents.context import AgentContext
 from app.agents.factory import SubAgentSpec, as_tool, build_agent
 from app.mcp.all_mcp import load_web_search_tools
-from app.agents.prompts import build_system_prompt
+from app.agents.prompts import build_live_context_section, build_system_prompt
+from app.db.queries import fetch_agent_prompt_context
 from app.agents.registry import SUBAGENTS
 from app.config import Settings
 from app.db.queries import get_product_kb
@@ -28,12 +30,15 @@ class AgentRuntime:
         self._pool = pool
         self._agent: Pregel | None = None
         self._kb_id: int | None = None
+        self._checkpointer = InMemorySaver()
+        self._model: ChatOpenAI | None = None
+        self._tools: list | None = None
 
     async def __aenter__(self) -> AgentRuntime:
         kb = await get_product_kb(self._pool)
         self._kb_id = kb.id
 
-        model = ChatOpenAI(
+        self._model = ChatOpenAI(
             model=self._settings.openai_model,
             api_key=self._settings.openai_api_key,
             temperature=self._settings.llm_temperature,
@@ -43,24 +48,38 @@ class AgentRuntime:
 
         subagent_tools = [
             as_tool(
-                build_agent(model, [*spec.tools, *web_search], spec.system_prompt),
+                build_agent(self._model, [*spec.tools, *web_search], spec.system_prompt),
                 spec,
                 kb.id,
             )
             for spec in SUBAGENTS
         ]
 
-        self._agent = build_agent(
-            model,
-            [create_post_idea, list_recent_posts, *web_search, *subagent_tools],
-            build_system_prompt(kb),
-        )
+        self._tools = [create_post_idea, list_recent_posts, *web_search, *subagent_tools]
+        self._base_prompt = build_system_prompt(kb)
+
+        await self._rebuild_agent()
         log.info("agent_runtime_started", subagents=[s.name for s in SUBAGENTS])
         return self
 
     async def __aexit__(self, *args: object) -> None:
         self._agent = None
         log.info("agent_runtime_stopped")
+
+    async def refresh(self) -> None:
+        """Rebuild agent with fresh context from DB. Call on /new command."""
+        await self._rebuild_agent()
+        log.info("agent_runtime_refreshed", kb_id=self._kb_id)
+
+    async def _rebuild_agent(self) -> None:
+        ctx = await fetch_agent_prompt_context(self._pool, self._kb_id)
+        system_prompt = self._base_prompt + build_live_context_section(ctx)
+        self._agent = build_agent(
+            self._model,
+            self._tools,
+            system_prompt,
+            checkpointer=self._checkpointer,
+        )
 
     async def run(self, thread_id: str, message: str) -> AsyncIterator[str]:
         assert self._agent is not None, "Call __aenter__ before run()"

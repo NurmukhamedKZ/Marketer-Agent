@@ -28,6 +28,13 @@ Reddit API → signals table → CMO Agent → X Sub-Agent → posts table (draf
 
 ---
 
+## ВАЖНО, пользовательские правила:
+1) Перед тем как писать какой либо код на LangChain или LangGraph, ты должен прочитать актуальную документацию через context7 MCP
+2) Не меней версий пакетов и зависимостей
+3) Не делай комиты в гит
+
+---
+
 ## Стек
 
 | Слой | Выбор |
@@ -478,9 +485,6 @@ LOG_FORMAT=json      # json (prod) | console (dev)
 | Загрузка MCP tools | `from app.mcp.all_mcp import load_web_search_tools` — единственная точка | `MultiServerMCPClient` напрямую в каждом сервисе — дублирование |
 | MCP серверы для агентов | только `"web_search"` через `load_web_search_tools()` | `"signals"`, `"posts"` — этих MCP серверов не существует, это `@tool` функции в `app/tools/` |
 
-## ВАЖНО:
-1) Перед тем как писать какой либо код на LangChain или LangGraph, ты должен прочитать актуальную документацию через context7 MCP
-2) Не меней версий пакетов и зависимостей
 
 ---
 
