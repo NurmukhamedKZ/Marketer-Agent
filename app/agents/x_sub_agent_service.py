@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import asyncpg
 import structlog
 from langchain.agents import create_agent
-from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langchain.tools import ToolRuntime, tool
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -90,9 +90,9 @@ class XSubAgentService:
         return MultiServerMCPClient(connections)
 
     def _build_agent(self, tools: list, system_prompt: str) -> Pregel:
-        model = ChatAnthropic(
-            model=self._settings.claude_model,
-            api_key=self._settings.anthropic_api_key,
+        model = ChatOpenAI(
+            model=self._settings.openai_model,
+            api_key=self._settings.openai_api_key,
             temperature=self._settings.llm_temperature,
             max_tokens=self._settings.llm_max_tokens,
         )

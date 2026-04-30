@@ -10,9 +10,9 @@ class Settings(BaseSettings):
     database_pool_min: int = 2
     database_pool_max: int = 10
 
-    # Anthropic
-    anthropic_api_key: str = ""
-    claude_model: str = "claude-sonnet-4-5"
+    # OpenAI
+    openai_api_key: str = ""
+    openai_model: str = "gpt-5.4-mini"
     llm_temperature: float = 0.7
     llm_max_tokens: int = 2000
 
@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     mcp_server_product_kb_cmd: str = "python -m app.mcp.product_kb_server"
     mcp_server_signals_cmd: str = "python -m app.mcp.signals_server"
     mcp_server_posts_cmd: str = "python -m app.mcp.posts_server"
-    mcp_server_web_search_cmd: str = "python -m app.mcp.web_search_server"
+    mcp_server_web_search_cmd: str = "python -m app.mcp.web_search"
     mcp_server_utm_cmd: str = "python -m app.mcp.utm_builder_server"
 
     # Reddit

@@ -8,7 +8,7 @@ from uuid import uuid4
 import asyncpg
 import structlog
 from langchain.agents import create_agent
-from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.pregel import Pregel
@@ -18,11 +18,16 @@ from app.agents.prompts import build_system_prompt
 from app.config import Settings
 from app.db.queries import get_product_kb
 from app.logging_setup import ToolCallLogger
+from app.tools.posts import create_post_idea, list_recent_posts
+from app.agents.x_sub_agent_service import make_invoke_x_sub_agent_tool, XSubAgentService
 
 log = structlog.get_logger()
 
-# MCP servers the CMO agent needs
-_CMO_MCP_SERVERS = ("signals", "posts", "web_search")
+# MCP servers the CMO agent needs (only external APIs)
+_CMO_MCP_SERVERS = ("web_search",)
+
+# In-process @tool functions
+_CMO_TOOLS = [create_post_idea, list_recent_posts]
 
 
 class CMOAgentService:
@@ -38,7 +43,15 @@ class CMOAgentService:
         product_kb = await get_product_kb(self._pool)
         self._product_kb_id = product_kb.id
         system_prompt = build_system_prompt(product_kb)
-        tools = await self._build_mcp_client().get_tools()
+
+        # MCP Servers' Tools
+        mcp_tools = await self._build_mcp_client().get_tools()
+
+        # Sub Agents
+        cmo_subagents = [make_invoke_x_sub_agent_tool(x_subagent)]
+
+        tools = _CMO_TOOLS + mcp_tools + cmo_subagents
+
         self._agent = self._build_agent(tools, system_prompt)
         log.info("cmo_agent_service_started", tools=[t.name for t in tools])
         return self
@@ -84,9 +97,9 @@ class CMOAgentService:
         return MultiServerMCPClient(connections)
 
     def _build_agent(self, tools: list, system_prompt: str) -> Pregel:
-        model = ChatAnthropic(
-            model=self._settings.claude_model,
-            api_key=self._settings.anthropic_api_key,
+        model = ChatOpenAI(
+            model=self._settings.openai_model,
+            api_key=self._settings.openai_api_key,
             temperature=self._settings.llm_temperature,
             max_tokens=self._settings.llm_max_tokens,
         )

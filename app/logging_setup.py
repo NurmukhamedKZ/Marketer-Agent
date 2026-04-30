@@ -64,13 +64,14 @@ class ToolCallLogger(BaseCallbackHandler):
 
     def on_tool_end(
         self,
-        output: str,
+        output: Any,
         *,
         run_id: Any,
         **kwargs: Any,
     ) -> None:
         duration = time.monotonic() - self._start_times.pop(str(run_id), time.monotonic())
-        self._log.info("tool_call_end", duration_ms=round(duration * 1000), output=output[:200])
+        output_str = output.content if hasattr(output, "content") else str(output)
+        self._log.info("tool_call_end", duration_ms=round(duration * 1000), output=output_str[:200])
 
     def on_tool_error(
         self,

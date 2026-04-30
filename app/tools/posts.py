@@ -2,9 +2,13 @@ from uuid import UUID
 
 import asyncpg
 from langchain.tools import tool, ToolRuntime
+from typing import Literal
 
 from app.agents.context import AgentContext
 from app.db.pool import get_pool
+
+
+platforms = Literal["x","reddit", "linkedin", "instagram", "tiktok"]
 
 
 async def _insert_post_idea(
@@ -14,7 +18,7 @@ async def _insert_post_idea(
     topic: str,
     angle: str,
     cmo_reasoning: str,
-    target_platform: str,
+    target_platform: platforms,
 ) -> dict:
     row = await pool.fetchrow(
         """
@@ -32,7 +36,7 @@ async def create_post_idea(
     topic: str,
     angle: str,
     cmo_reasoning: str,
-    target_platform: str,
+    target_platform: platforms,
     runtime: ToolRuntime[AgentContext],
 ) -> dict:
     """Save the CMO's strategic decision for a signal. Returns post_idea_id."""
@@ -48,7 +52,7 @@ async def create_post_idea(
 async def _list_recent_posts(
     pool: asyncpg.Pool,
     product_kb_id: int,
-    platform: str,
+    platform: platforms,
     limit: int,
 ) -> list[dict]:
     rows = await pool.fetch(
@@ -66,7 +70,7 @@ async def _list_recent_posts(
 
 @tool
 async def list_recent_posts(
-    platform: str,
+    platform: platforms,
     limit: int,
     runtime: ToolRuntime[AgentContext],
 ) -> list[dict]:

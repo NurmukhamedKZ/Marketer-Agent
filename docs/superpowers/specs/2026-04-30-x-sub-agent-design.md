@@ -52,8 +52,8 @@ class XSubAgentService:
 
     async def run(
         self,
-        thread_id: str,
         message: str,
+        thread_id: str,
         product_kb_id: int,
         post_idea_id: UUID,
     ) -> str:
@@ -85,7 +85,7 @@ def make_invoke_x_sub_agent_tool(service: XSubAgentService):
         thread_id = str(uuid4())
         message = build_x_subagent_message(topic, angle, cmo_reasoning, retry_context)
         result = await service.run(
-            thread_id, message,
+            message, thread_id,
             runtime.context.product_kb_id,
             UUID(post_idea_id),
         )
@@ -188,13 +188,13 @@ async def main():
     async with asyncpg.create_pool(settings.database_url) as pool:
         async with XSubAgentService(settings, pool) as x_service:
             result = await x_service.run(
-                thread_id=str(uuid4()),
                 message=build_x_subagent_message(
                     topic="SaaS pricing mistakes",
                     angle="What founders get wrong in year 1",
                     cmo_reasoning="High engagement topic in our ICP",
                     retry_context=None,
                 ),
+                thread_id=str(uuid4()),
                 product_kb_id=1,          # hardcoded for MVP
                 post_idea_id=UUID("..."), # real ID from DB
             )

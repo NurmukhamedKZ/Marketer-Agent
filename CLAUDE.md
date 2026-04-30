@@ -20,9 +20,11 @@ Reddit API → signals table → CMO Agent → X Sub-Agent → posts table (draf
 - CMO Agent — стратегия: какой сигнал взять, какой топик/угол, делегирует X Sub-Agent
 - X Sub-Agent — тактика: пишет конкретный пост для X
 
-**Инструменты = MCP серверы (FastMCP).** Каждый MCP сервер — отдельный процесс. Агенты подключаются к ним через `langchain-mcp-adapters` (stdio transport).
+**Инструменты — два типа:**
+- **`@tool` функции** (`app/tools/`) — для DB операций (posts, post_ideas) и stateless утилит (utm_builder). Живут в том же процессе что и агент. Контекст (`product_kb_id`, `signal_id`, `post_idea_id`) инжектируется через `ToolRuntime[AgentContext]` — LLM эти поля не видит.
+- **MCP серверы** (`app/mcp/`) — только для внешних API. Сейчас: `web_search` (Tavily). Отдельные процессы, stdio transport, `langchain-mcp-adapters`.
 
-**product_kb — не MCP сервер.** Это статичный контекст, который читается из БД напрямую через `get_product_kb(pool)` из `app/db/queries.py` и вшивается в system prompt агента перед запуском. MCP нужен только для динамических инструментов, которые агент вызывает сам в процессе reasoning loop.
+**product_kb — не инструмент.** Статичный контекст, читается из БД через `get_product_kb(pool)` из `app/db/queries.py` и вшивается в system prompt агента перед запуском.
 
 ---
 
@@ -31,8 +33,8 @@ Reddit API → signals table → CMO Agent → X Sub-Agent → posts table (draf
 | Слой | Выбор |
 |---|---|
 | Язык | Python 3.12+ |
-| Агенты | LangChain ≥ 1.2 (`langchain`, `langchain-anthropic`, `langchain-mcp-adapters`) |
-| LLM | Claude Sonnet (`claude-sonnet-4-5`) через `ChatAnthropic` |
+| Агенты | LangChain ≥ 1.2 (`langchain`, `langchain-openai`, `langchain-mcp-adapters`) |
+| LLM | GPT (`gpt-5.4-mini`) через `ChatOpenAI` |
 | MCP | FastMCP, stdio transport, отдельные процессы |
 | Telegram | aiogram v3+ |
 | БД | PostgreSQL 18 + asyncpg |
@@ -58,15 +60,17 @@ app/
   models/                    # pydantic модели + state machine
   signals/
     reddit_collector.py      # PRAW scraper (запускается cron)
-  mcp/                       # FastMCP серверы (каждый — отдельный процесс)
-    signals_server.py
-    posts_server.py
-    web_search_server.py
-    utm_builder_server.py
+  mcp/                       # FastMCP серверы — только для внешних API
+    web_search.py            # Tavily wrapper (отдельный процесс, stdio)
+  tools/                     # LangChain @tool функции (in-process)
+    posts.py                 # create_post_idea, create_post_draft, list_recent_posts, get_post
+    utm_builder.py           # build_utm_url (stateless)
   agents/
+    context.py               # AgentContext dataclass (ToolRuntime контекст)
+    mcp_client.py            # get_web_search_tools() — загрузка MCP tools
     cmo_agent_service.py     # CMOAgentService: lifecycle + run() — transport-agnostic
     x_sub_agent_service.py   # XSubAgentService: то же для X sub-agent
-    prompts.py               # build_system_prompt(product_kb) — строки промптов
+    prompts.py               # build_system_prompt, build_x_sub_agent_prompt, build_x_subagent_message
     schemas.py               # pydantic-модели для outputs агентов
   approval/
     bot.py                   # aiogram Dispatcher
@@ -75,6 +79,8 @@ app/
     x_publisher.py           # tweepy
   analytics/
     x_fetcher.py             # daily metrics
+scripts/
+  test_x_subagent.py        # smoke test: вызов X Sub-Agent напрямую (PYTHONPATH=. python scripts/test_x_subagent.py <post_idea_id>)
 ```
 
 **Важно для будущего дашборда:** бизнес-логика живёт в `agents/`, `publisher/`, `analytics/` — они никогда не знают про Telegram. `approval/` — изолированный transport слой. Когда придёт время добавить FastAPI, просто добавляем `app/api/` с роутами, которые вызывают те же сервисы.
@@ -90,9 +96,9 @@ class CMOAgentService:
     def __init__(self, settings: Settings, pool: asyncpg.Pool) -> None: ...
 
     async def __aenter__(self) -> CMOAgentService:
-        # 1. Читает product_kb из БД → строит system_prompt
-        # 2. Вызывает MultiServerMCPClient.get_tools() → получает tool definitions
-        # 3. Строит агента через create_agent() с InMemorySaver
+        # 1. Читает product_kb из БД → сохраняет product_kb_id, строит system_prompt
+        # 2. Собирает tools: @tool функции + MCP tools (web_search)
+        # 3. Строит агента через create_agent() с context_schema=AgentContext
         ...
 
     async def __aexit__(self, *args) -> None: ...
@@ -126,6 +132,7 @@ async with CMOAgentService(settings, pool) as cmo:
 async for event in agent.astream_events(
     {"messages": [{"role": "user", "content": message}]},
     config={"configurable": {"thread_id": thread_id}, ...},
+    context=AgentContext(product_kb_id=self._product_kb_id),  # инжекция контекста
     version="v2",
 ):
     if event["event"] == "on_chat_model_stream":
@@ -167,13 +174,13 @@ draft → pending → approved → published
 |---|---|---|
 | 1 | Project skeleton (pyproject.toml, config, structlog, DB pool, migration runner) | ✅ Готово |
 | 2 | Schema migration + state_machine.py + тесты | ✅ Готово (частично — state_machine.py есть) |
-| 3 | product_kb setup + тест | 🔲 |
+| 3 | product_kb setup + тест | ✅ Готово |
 | 4 | Reddit collector + тесты | ✅ Готово (`app/signals/reddit_collector.py`, 8 тестов) |
 | 5 | signals MCP сервер + тест | ✅ Готово |
-| 6 | posts MCP сервер + utm_builder MCP сервер + тесты | 🔲 |
-| 7 | web_search MCP сервер (Tavily wrapper) | 🔲 |
-| 8 | Smoke test MCP слоя (скрипт + langchain-mcp-adapters) | 🔲 |
-| 9 | X Sub-Agent — вызвать напрямую с ручным post_idea | 🔲 |
+| 6 | posts @tool функции + utm_builder + AgentContext + mcp_client + тесты | ✅ Готово (`app/tools/`, `app/agents/context.py`, `app/agents/mcp_client.py`) |
+| 7 | web_search MCP сервер (Searxng) | ✅ Готово |
+| 8 | Smoke test MCP слоя (скрипт + langchain-mcp-adapters) | ✅ Готово (`tests/test_mcp_web_search.py` — 23 теста, `tests/test_mcp_client.py` — 6 smoke тестов) |
+| 9 | X Sub-Agent — вызвать напрямую с ручным post_idea | ✅ Готово (`app/agents/x_sub_agent_service.py`, `scripts/test_x_subagent.py`, 9 тестов) |
 | 10 | Telegram bot (aiogram) — send_for_approval + 3 кнопки | 🔲 |
 | 11 | X Publisher — привязать к approve callback | 🔲 |
 | 12 | CMO Agent — создаёт post_ideas, вызывает X Sub-Agent | 🔲 |
@@ -181,6 +188,70 @@ draft → pending → approved → published
 | 14 | Тесты агентов (mocked LLM + MCP) | 🔲 |
 | 15 | systemd units, cron, deployment scripts | 🔲 |
 | 16 | README | 🔲 |
+
+---
+
+## @tool + ToolRuntime — паттерн реализации
+
+Все DB-инструменты агентов живут в `app/tools/`. Паттерн: приватный хелпер для логики + публичный `@tool` для LangChain.
+
+```python
+from langchain.tools import tool, ToolRuntime  # НЕ langchain_core.tools — ToolRuntime там не экспортируется
+from app.agents.context import AgentContext
+from app.db import get_pool
+
+# Приватный хелпер — тестируется напрямую, без ToolRuntime
+async def _insert_post_idea(pool, product_kb_id, signal_id, topic, angle, reasoning, platform) -> dict:
+    row = await pool.fetchrow("""
+        INSERT INTO post_ideas (product_kb_id, signal_id, topic, angle, cmo_reasoning, target_platform)
+        VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+    """, product_kb_id, signal_id, topic, angle, reasoning, platform)
+    return {"post_idea_id": str(row["id"])}
+
+# Публичный @tool — только прокси, контекст из ToolRuntime
+@tool
+async def create_post_idea(
+    topic: str,
+    angle: str,
+    cmo_reasoning: str,
+    target_platform: str,
+    runtime: ToolRuntime[AgentContext],  # LLM это поле НЕ видит
+) -> dict:
+    """Save the CMO's strategic decision for a signal. Returns post_idea_id."""
+    pool = await get_pool()
+    return await _insert_post_idea(
+        pool,
+        runtime.context.product_kb_id,  # из AgentContext, не от LLM
+        runtime.context.signal_id,
+        topic, angle, cmo_reasoning, target_platform,
+    )
+```
+
+**Как работает ToolRuntime:**
+1. `create_agent(model, tools, context_schema=AgentContext)` — регистрирует схему контекста
+2. `agent.astream_events(..., context=AgentContext(product_kb_id=..., signal_id=...))` — передаёт контекст
+3. LangChain автоматически заполняет `runtime.context` из этого контекста при каждом вызове инструмента
+4. `runtime: ToolRuntime[AgentContext]` убирается из LLM-видимой схемы автоматически
+
+**Проверка схемы:**
+```python
+# Правильно — смотреть через model.bind_tools
+bound = model.bind_tools([create_post_idea])
+# Видно: ['topic', 'angle', 'cmo_reasoning', 'target_platform'] — без runtime ✅
+
+# Неправильно — падает с PydanticInvalidForJsonSchema
+create_post_idea.args_schema.model_json_schema()  # ❌ не использовать
+```
+
+**Тестирование — вызывать приватный хелпер напрямую:**
+```python
+async def test_create_post_idea(db_pool, seed_ids):
+    result = await _insert_post_idea(
+        db_pool, seed_ids["product_kb_id"], seed_ids["signal_id"],
+        "topic", "angle", "reasoning", "x",
+    )
+    assert "post_idea_id" in result
+```
 
 ---
 
@@ -254,6 +325,16 @@ LOG_FORMAT=json      # json (prod) | console (dev)
 | MCP client lifecycle | `client.get_tools()` вызывается один раз при старте | `async with client` — context manager удалён в 0.2.2 |
 | MCP сессии | Каждый tool call открывает свою stdio-сессию автоматически | Не нужно держать persistent connection |
 | Стриминг | `agent.astream_events(..., version="v2")` | `agent.astream()` даёт chunks, не токены |
+| Скрытый контекст в @tool | `runtime: ToolRuntime[AgentContext]` в сигнатуре + `context_schema=AgentContext` в `create_agent` | ContextVar (не нужен — ToolRuntime работает нативно) |
+| Передача контекста при вызове | `agent.astream_events(..., context=AgentContext(...))` | Передавать через аргументы инструмента (LLM увидит) |
+| Проверка LLM-видимой схемы | `model.bind_tools([tool])` и смотреть на tool_calls в ответе | `tool.args_schema.model_json_schema()` — падает с PydanticInvalidForJsonSchema для ToolRuntime |
+| `args_schema` MCP инструментов (из `langchain-mcp-adapters`) | `tool.args_schema` — это plain `dict` (JSON Schema); доступ: `tool.args_schema.get("properties", {})` | `tool.args_schema.model_json_schema()` — AttributeError, т.к. это не Pydantic-модель |
+| FastMCP `@mcp.tool` | Декоратор оставляет функцию callable: `await web_search(query, count)` — работает напрямую | — |
+| Запуск MCP сервера web_search | `python -m app.mcp.web_search` | `python -m app.mcp.web_search_server` — модуль не существует |
+
+## ВАЖНО:
+1) Перед тем как писать какой либо код на LangChain или LangGraph, ты должен прочитать актуальную документацию через context7 MCP
+2) Не меней версий пакетов и зависимостей
 
 ---
 
@@ -262,13 +343,14 @@ LOG_FORMAT=json      # json (prod) | console (dev)
 1. **Прочитай весь спек перед тем как писать код.** Не начинай имплементацию сразу.
 2. **Проверь LangChain ≥ 1.2 API** перед стартом — см. таблицу выше.
 3. **Проверь `langchain-mcp-adapters`** — правильное ли имя пакета, работает ли stdio.
-4. **MCP: только stdio транспорт** для MVP. Не поднимать HTTP серверы для MCP.
-5. **Агенты — сервисные классы**, не функции. Один инстанс на процесс, lifecycle через `async with`.
-6. **Type hints везде.** `mypy --strict` должен проходить на `app/`.
-7. **Все внешние данные через pydantic модели** (LLM outputs, API responses, MCP returns).
-8. **Async везде.** Не мешать sync DB calls в async пути.
-9. **Один публичный метод на сервис** (`run()`). Детали реализации — `_private`.
-10. **Константы из config**, не hardcoded.
+4. **Инструменты — `@tool`, не MCP по умолчанию.** MCP только когда нужна изоляция процесса (внешние API). DB-операции и stateless утилиты → `@tool` в `app/tools/`.
+5. **MCP: только stdio транспорт** для MVP. Не поднимать HTTP серверы для MCP.
+6. **Агенты — сервисные классы**, не функции. Один инстанс на процесс, lifecycle через `async with`.
+7. **Type hints везде.** `mypy --strict` должен проходить на `app/`.
+8. **Все внешние данные через pydantic модели** (LLM outputs, API responses, MCP returns).
+9. **Async везде.** Не мешать sync DB calls в async пути.
+10. **Один публичный метод на сервис** (`run()`). Детали реализации — `_private`.
+11. **Константы из config**, не hardcoded.
 
 ---
 
