@@ -73,3 +73,49 @@ def test_build_x_subagent_message_with_retry_includes_context():
     )
     assert "Previous attempt failed: post was too long, exceeded 270 chars" in msg
     assert "Try a different approach" in msg
+
+
+from unittest.mock import AsyncMock, MagicMock
+
+
+def test_make_invoke_x_sub_agent_tool_returns_tool_with_correct_name():
+    from app.agents.x_sub_agent_service import make_invoke_x_sub_agent_tool
+
+    mock_service = MagicMock()
+    tool_fn = make_invoke_x_sub_agent_tool(mock_service)
+    assert tool_fn.name == "invoke_x_sub_agent"
+
+
+@pytest.mark.asyncio
+async def test_make_invoke_x_sub_agent_tool_calls_service_run():
+    from app.agents.x_sub_agent_service import make_invoke_x_sub_agent_tool
+    from uuid import UUID
+
+    mock_service = AsyncMock()
+    mock_service.run.return_value = "Great post written"
+
+    tool_fn = make_invoke_x_sub_agent_tool(mock_service)
+
+    mock_runtime = MagicMock()
+    mock_runtime.context.product_kb_id = 42
+
+    # Call the underlying coroutine function directly, bypassing ToolRuntime injection
+    post_idea_uuid = "12345678-1234-5678-1234-567812345678"
+    result = await tool_fn.coroutine(
+        post_idea_id=post_idea_uuid,
+        topic="SaaS pricing",
+        angle="Year 1 mistakes",
+        cmo_reasoning="High engagement",
+        retry_context=None,
+        runtime=mock_runtime,
+    )
+
+    assert mock_service.run.called
+    call_kwargs = mock_service.run.call_args
+    # message arg (positional 0) contains topic
+    assert "SaaS pricing" in call_kwargs.args[0]
+    # product_kb_id matches runtime context
+    assert call_kwargs.args[2] == 42
+    # post_idea_id is UUID
+    assert call_kwargs.args[3] == UUID(post_idea_uuid)
+    assert result == {"result": "Great post written"}
