@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from uuid import uuid4
 
 import asyncpg
@@ -12,7 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agents.context import AgentContext
 from app.agents.factory import SubAgentSpec, as_tool, build_agent
-from app.mcp.all_mcp import load_web_search_tools
+from app.mcp.web_search import web_search_session
 from app.agents.prompts import build_live_context_section, build_system_prompt
 from app.db.queries import fetch_agent_prompt_context
 from app.agents.registry import SUBAGENTS
@@ -33,6 +34,7 @@ class AgentRuntime:
         self._checkpointer = InMemorySaver()
         self._model: ChatOpenAI | None = None
         self._tools: list | None = None
+        self._exit_stack = AsyncExitStack()
 
     async def __aenter__(self) -> AgentRuntime:
         kb = await get_product_kb(self._pool)
@@ -44,7 +46,8 @@ class AgentRuntime:
             temperature=self._settings.llm_temperature,
             max_tokens=self._settings.llm_max_tokens,
         )
-        web_search = await load_web_search_tools()
+
+        _, web_search = await self._exit_stack.enter_async_context(web_search_session())
 
         subagent_tools = [
             as_tool(
@@ -63,6 +66,7 @@ class AgentRuntime:
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        await self._exit_stack.aclose()
         self._agent = None
         log.info("agent_runtime_stopped")
 

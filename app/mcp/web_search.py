@@ -1,5 +1,12 @@
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_core.tools import BaseTool
+from mcp import ClientSession
 from urllib.parse import urlparse
 import logging
 import asyncio
@@ -7,7 +14,29 @@ import httpx
 import html
 import os
 import re
+import shlex
+
 mcp = FastMCP("Web-Search", instructions="Server for Web-searching ")
+
+_cmd = "python -m app.mcp.web_search"
+
+
+def _client() -> MultiServerMCPClient:
+    parts = shlex.split(_cmd)
+    return MultiServerMCPClient(
+        {"web_search": {"command": parts[0], "args": parts[1:], "transport": "stdio"}}
+    )
+
+
+@asynccontextmanager
+async def web_search_session() -> AsyncIterator[tuple[ClientSession, list[BaseTool]]]:
+    """Open a persistent web_search MCP session and yield (session, tools).
+
+    The subprocess stays alive for the duration of the context — no per-call respawn.
+    """
+    async with _client().session("web_search") as session:
+        tools = await load_mcp_tools(session, server_name="web_search")
+        yield session, tools
 
 logger = logging.getLogger(__name__)
 

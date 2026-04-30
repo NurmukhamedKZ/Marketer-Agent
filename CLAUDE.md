@@ -68,8 +68,7 @@ app/
   signals/
     reddit_collector.py      # PRAW scraper (запускается cron)
   mcp/                       # FastMCP серверы — только для внешних API
-    web_search.py            # Tavily wrapper (отдельный процесс, stdio)
-    all_mcp.py               # load_web_search_tools() — единственная точка загрузки MCP tools
+    web_search.py            # Tavily wrapper (отдельный процесс, stdio) + web_search_session() клиентский контекст-менеджер
   tools/                     # LangChain @tool функции (in-process)
     posts.py                 # create_post_idea, create_post_draft, list_recent_posts, get_post
     utm_builder.py           # build_utm_url (stateless)
@@ -144,12 +143,17 @@ SUBAGENTS: list[SubAgentSpec] = [
 
 ```python
 class AgentRuntime:
-    def __init__(self, settings: Settings, pool: asyncpg.Pool) -> None: ...
+    def __init__(self, settings: Settings, pool: asyncpg.Pool) -> None:
+        self._exit_stack = AsyncExitStack()  # держит MCP сессию живой
+        ...
 
     async def __aenter__(self) -> AgentRuntime:
         kb = await get_product_kb(pool)
         model = ChatOpenAI(...)
-        web_search = await load_web_search_tools()   # app/mcp/all_mcp.py
+        # Открываем persistent stdio-сессию — subprocess живёт весь lifetime runtime
+        _, web_search = await self._exit_stack.enter_async_context(
+            web_search_session()   # из app/mcp/web_search.py
+        )
         subagent_tools = [
             as_tool(build_agent(model, [*spec.tools, *web_search], spec.system_prompt), spec, kb.id)
             for spec in SUBAGENTS
@@ -159,7 +163,9 @@ class AgentRuntime:
             build_system_prompt(kb))
         ...
 
-    async def __aexit__(self, *args) -> None: ...
+    async def __aexit__(self, *args) -> None:
+        await self._exit_stack.aclose()  # закрывает MCP subprocess
+        ...
 
     async def run(self, thread_id: str, message: str) -> AsyncIterator[str]:
         # Стримит токены через astream_events(version="v2")
@@ -470,8 +476,9 @@ LOG_FORMAT=json      # json (prod) | console (dev)
 | Создание агента | `from langchain.agents import create_agent` | `from langgraph.prebuilt import create_react_agent` (deprecated) |
 | Параметр промпта | `system_prompt=...` | `prompt=...` (старый API) |
 | Тип скомпилированного графа | `from langgraph.pregel import Pregel` | `CompiledGraph` (не существует в 1.1.10) |
-| MCP client lifecycle | `client.get_tools()` вызывается один раз при старте | `async with client` — context manager удалён в 0.2.2 |
-| MCP сессии | Каждый tool call открывает свою stdio-сессию автоматически | Не нужно держать persistent connection |
+| MCP client lifecycle | `async with client.session("web_search") as session` + `load_mcp_tools(session)` — persistent subprocess | `async with MultiServerMCPClient(...)` — context manager удалён в 0.1.0, `NotImplementedError` |
+| MCP сессии | `load_mcp_tools(session=session)` — все tool calls используют одну сессию, subprocess не пересоздаётся | `load_mcp_tools(session=None, connection=...)` — новый subprocess на каждый вызов инструмента |
+| Persistent MCP в AgentRuntime | `AsyncExitStack` + `web_search_session()` из `app/mcp/web_search.py` открывается в `__aenter__`, закрывается в `__aexit__` | Держать клиент без сессии — subprocess всё равно пересоздаётся per call |
 | Стриминг | `agent.astream_events(..., version="v2")` | `agent.astream()` даёт chunks, не токены |
 | Скрытый контекст в @tool | `runtime: ToolRuntime[AgentContext]` в сигнатуре + `context_schema=AgentContext` в `create_agent` | ContextVar (не нужен — ToolRuntime работает нативно) |
 | Передача контекста при вызове | `agent.astream_events(..., context=AgentContext(...))` | Передавать через аргументы инструмента (LLM увидит) |
@@ -482,8 +489,8 @@ LOG_FORMAT=json      # json (prod) | console (dev)
 | Импорт `ToolRuntime` | `from langchain.tools import tool, ToolRuntime` | `from langchain_core.tools import ToolRuntime` — не экспортируется, `ImportError` |
 | Тест async `@tool` напрямую | `await tool_fn.coroutine(arg1=..., arg2=...)` | `tool_fn.func(...)` — `func` is `None` для async tools, `TypeError` |
 | `ToolCallLogger.on_tool_end` — тип `output` | `output.content if hasattr(output, "content") else str(output)` | `output[:200]` — `ToolMessage` не subscriptable в новых версиях LangChain |
-| Загрузка MCP tools | `from app.mcp.all_mcp import load_web_search_tools` — единственная точка | `MultiServerMCPClient` напрямую в каждом сервисе — дублирование |
-| MCP серверы для агентов | только `"web_search"` через `load_web_search_tools()` | `"signals"`, `"posts"` — этих MCP серверов не существует, это `@tool` функции в `app/tools/` |
+| Загрузка MCP tools | `from app.mcp.web_search import web_search_session` — единственная точка | `from app.mcp.all_mcp import ...` — файл удалён |
+| MCP серверы для агентов | только `"web_search"` через `web_search_session()` | `"signals"`, `"posts"` — этих MCP серверов не существует, это `@tool` функции в `app/tools/` |
 
 
 ---
